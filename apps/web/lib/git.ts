@@ -1,0 +1,71 @@
+import { simpleGit, type SimpleGit } from "simple-git";
+
+function getRepoPath(): string {
+  return process.env.CMUX_DIFF_REPO ?? process.cwd();
+}
+
+function git(): SimpleGit {
+  return simpleGit(getRepoPath());
+}
+
+export async function getBaseBranch(): Promise<string> {
+  const g = git();
+  const local = await g.branchLocal();
+  for (const name of ["main", "master", "develop", "dev"]) {
+    if (local.all.includes(name)) return name;
+  }
+  return "main";
+}
+
+export async function getMergeBase(baseBranch: string): Promise<string> {
+  const g = git();
+  const mb = await g.raw(["merge-base", "HEAD", baseBranch]);
+  return mb.trim();
+}
+
+export interface DiffResult {
+  patch: string;
+  baseBranch: string;
+  mergeBase: string;
+  branch: string;
+}
+
+export async function getDiff(base?: string): Promise<DiffResult> {
+  const g = git();
+  const baseBranch = base ?? (await getBaseBranch());
+  const mergeBase = await getMergeBase(baseBranch);
+  const patch = await g.diff([`${mergeBase}...HEAD`]);
+  const branch = (await g.revparse(["--abbrev-ref", "HEAD"])).trim();
+  return { patch, baseBranch, mergeBase, branch };
+}
+
+export interface DiffFileStat {
+  file: string;
+  changes: number;
+  insertions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface DiffStatsResult {
+  files: DiffFileStat[];
+  insertions: number;
+  deletions: number;
+  branch: string;
+  baseBranch: string;
+}
+
+export async function getDiffStats(base?: string): Promise<DiffStatsResult> {
+  const g = git();
+  const baseBranch = base ?? (await getBaseBranch());
+  const mergeBase = await getMergeBase(baseBranch);
+  const summary = await g.diffSummary([`${mergeBase}...HEAD`]);
+  const branch = (await g.revparse(["--abbrev-ref", "HEAD"])).trim();
+  return {
+    files: summary.files as DiffFileStat[],
+    insertions: summary.insertions,
+    deletions: summary.deletions,
+    branch,
+    baseBranch,
+  };
+}
