@@ -34,7 +34,7 @@ export function DiffApp({ repoPath }: { repoPath: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const lastPatchRef = useRef<string>("");
+  const lastPatchRef = useRef<string | null>(null);
 
   async function fetchDiff(silent = false) {
     if (!silent) setRefreshing(true);
@@ -206,8 +206,8 @@ export function DiffApp({ repoPath }: { repoPath: string }) {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3] overflow-hidden">
       <StatusBar
-        branch={diffData?.branch ?? "…"}
-        baseBranch={diffData?.baseBranch ?? "main"}
+        branch={filesData?.branch ?? diffData?.branch ?? "…"}
+        baseBranch={filesData?.baseBranch ?? diffData?.baseBranch ?? "main"}
         insertions={filesData?.insertions ?? 0}
         deletions={filesData?.deletions ?? 0}
         fileCount={filesData?.files.length ?? 0}

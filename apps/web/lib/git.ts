@@ -10,11 +10,18 @@ function git(): SimpleGit {
 
 export async function getBaseBranch(): Promise<string> {
   const g = git();
+  // Prefer remote tracking branch so diffs show unpushed commits
+  // even when you're already on main locally.
+  const remotes = await g.branch(["-r"]);
+  for (const name of ["main", "master", "develop", "dev"]) {
+    if (remotes.all.includes(`origin/${name}`)) return `origin/${name}`;
+  }
+  // Fall back to local branch
   const local = await g.branchLocal();
   for (const name of ["main", "master", "develop", "dev"]) {
     if (local.all.includes(name)) return name;
   }
-  return "main";
+  return "origin/main";
 }
 
 export async function getMergeBase(baseBranch: string): Promise<string> {
@@ -34,7 +41,9 @@ export async function getDiff(base?: string): Promise<DiffResult> {
   const g = git();
   const baseBranch = base ?? (await getBaseBranch());
   const mergeBase = await getMergeBase(baseBranch);
-  const patch = await g.diff([`${mergeBase}...HEAD`]);
+  // Compare working tree to merge-base: covers committed + staged + unstaged
+  // in one clean patch with no duplicate file entries.
+  const patch = await g.diff([mergeBase]);
   const branch = (await g.revparse(["--abbrev-ref", "HEAD"])).trim();
   return { patch, baseBranch, mergeBase, branch };
 }
@@ -59,8 +68,9 @@ export async function getDiffStats(base?: string): Promise<DiffStatsResult> {
   const g = git();
   const baseBranch = base ?? (await getBaseBranch());
   const mergeBase = await getMergeBase(baseBranch);
-  const summary = await g.diffSummary([`${mergeBase}...HEAD`]);
   const branch = (await g.revparse(["--abbrev-ref", "HEAD"])).trim();
+
+  const summary = await g.diffSummary([mergeBase]);
   return {
     files: summary.files as DiffFileStat[],
     insertions: summary.insertions,

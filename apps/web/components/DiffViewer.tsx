@@ -46,7 +46,6 @@ function InlineCommentInput({
       <div className="text-[11px] text-[#8b949e] font-mono mb-2">
         {file.split("/").pop()}
       </div>
-      {/* Tags */}
       <div className="flex gap-1.5 mb-2 flex-wrap">
         {TAGS.map((t) => (
           <button
@@ -62,7 +61,6 @@ function InlineCommentInput({
           </button>
         ))}
       </div>
-      {/* Textarea */}
       <textarea
         autoFocus
         value={body}
@@ -96,12 +94,13 @@ function InlineCommentInput({
   );
 }
 
-interface CommentDisplayProps {
+function CommentDisplay({
+  comment,
+  onDelete,
+}: {
   comment: Comment;
   onDelete: () => void;
-}
-
-function CommentDisplay({ comment, onDelete }: CommentDisplayProps) {
+}) {
   return (
     <div className="my-1 mx-4 flex items-start gap-2 rounded border border-white/10 bg-[#161b22] p-2.5 text-xs">
       {comment.tag && (
@@ -118,6 +117,134 @@ function CommentDisplay({ comment, onDelete }: CommentDisplayProps) {
       >
         ×
       </button>
+    </div>
+  );
+}
+
+// PatchDiff only handles single-file patches. Split the full multi-file patch
+// on "diff --git" boundaries and render one PatchDiff per file.
+function splitPatch(patch: string): Array<{ file: string; patch: string }> {
+  return patch
+    .split(/(?=^diff --git )/gm)
+    .filter((s) => s.trimStart().startsWith("diff --git "))
+    .map((filePatch) => {
+      const match = filePatch.match(/^diff --git a\/(.+?) b\//m);
+      return { file: match?.[1] ?? "", patch: filePatch };
+    });
+}
+
+interface SingleFileDiffProps {
+  file: string;
+  filePatch: string;
+  layout: "split" | "stacked";
+  comments: Comment[];
+  onAddComment: (
+    file: string,
+    lineNumber: number,
+    side: string,
+    body: string,
+    tag: CommentTag
+  ) => Promise<void>;
+  onDeleteComment: (id: string) => Promise<void>;
+}
+
+function SingleFileDiff({
+  file,
+  filePatch,
+  layout,
+  comments,
+  onAddComment,
+  onDeleteComment,
+}: SingleFileDiffProps) {
+  const [commentTarget, setCommentTarget] = useState<{
+    lineNumber: number;
+    side: AnnotationSide;
+  } | null>(null);
+
+  const lineAnnotations = useMemo((): DiffLineAnnotation<AnnotationData>[] => {
+    const annotations: DiffLineAnnotation<AnnotationData>[] = comments
+      .filter((c) => c.file === file)
+      .map((c) => ({
+        side: (c.side ?? "right") as AnnotationSide,
+        lineNumber: c.lineNumber,
+        metadata: { type: "comment" as const, comment: c },
+      }));
+
+    if (commentTarget) {
+      annotations.push({
+        side: commentTarget.side,
+        lineNumber: commentTarget.lineNumber,
+        metadata: { type: "input" as const, file },
+      });
+    }
+
+    return annotations;
+  }, [comments, commentTarget, file]);
+
+  const renderAnnotation = useCallback(
+    (annotation: DiffLineAnnotation<AnnotationData>) => {
+      const d = annotation.metadata;
+      if (!d) return null;
+
+      if (d.type === "input") {
+        return (
+          <InlineCommentInput
+            lineNumber={annotation.lineNumber}
+            side={annotation.side}
+            file={file}
+            onSubmit={async (body, tag) => {
+              await onAddComment(file, annotation.lineNumber, annotation.side, body, tag);
+              setCommentTarget(null);
+            }}
+            onCancel={() => setCommentTarget(null)}
+          />
+        );
+      }
+
+      if (d.type === "comment") {
+        return (
+          <CommentDisplay
+            comment={d.comment}
+            onDelete={() => onDeleteComment(d.comment.id)}
+          />
+        );
+      }
+
+      return null;
+    },
+    [file, onAddComment, onDeleteComment]
+  );
+
+  const renderGutterUtility = useCallback(
+    (getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined) => (
+      <button
+        className="cmux-gutter-btn"
+        title="Add comment for AI"
+        onClick={() => {
+          const line = getHoveredLine();
+          if (line) setCommentTarget({ lineNumber: line.lineNumber, side: line.side });
+        }}
+      >
+        +
+      </button>
+    ),
+    []
+  );
+
+  return (
+    <div data-filename={file}>
+      <PatchDiff
+        patch={filePatch}
+        options={{
+          diffStyle: layout === "split" ? "split" : "unified",
+          disableLineNumbers: false,
+          theme: "github-dark",
+          lineDiffType: "word",
+        }}
+        lineAnnotations={lineAnnotations}
+        renderAnnotation={renderAnnotation}
+        renderGutterUtility={renderGutterUtility}
+      />
     </div>
   );
 }
@@ -143,108 +270,10 @@ export function DiffViewer({
   comments,
   onAddComment,
   onDeleteComment,
-  selectedFileId,
 }: DiffViewerProps) {
-  const [commentTarget, setCommentTarget] = useState<{
-    lineNumber: number;
-    side: AnnotationSide;
-    file: string;
-  } | null>(null);
+  const filePatches = useMemo(() => splitPatch(patch), [patch]);
 
-  // Parse which file is currently hovered from the patch
-  // We store the last-hovered file via a ref so the gutter click can use it
-  const currentHoveredFile = useMemo(() => {
-    if (!patch) return null;
-    // Extract first file from patch as default
-    const match = patch.match(/^diff --git a\/(.+?) b\//m);
-    return match?.[1] ?? null;
-  }, [patch]);
-
-  const [gutterFile, setGutterFile] = useState<string>(currentHoveredFile ?? "");
-
-  const lineAnnotations = useMemo((): DiffLineAnnotation<AnnotationData>[] => {
-    const annotations: DiffLineAnnotation<AnnotationData>[] = comments.map(
-      (c) => ({
-        side: (c.side ?? "right") as AnnotationSide,
-        lineNumber: c.lineNumber,
-        metadata: { type: "comment" as const, comment: c },
-      })
-    );
-
-    if (commentTarget) {
-      annotations.push({
-        side: commentTarget.side,
-        lineNumber: commentTarget.lineNumber,
-        metadata: { type: "input" as const, file: commentTarget.file },
-      });
-    }
-
-    return annotations;
-  }, [comments, commentTarget]);
-
-  const renderAnnotation = useCallback(
-    (annotation: DiffLineAnnotation<AnnotationData>) => {
-      const d = annotation.metadata;
-      if (!d) return null;
-
-      if (d.type === "input") {
-        return (
-          <InlineCommentInput
-            lineNumber={annotation.lineNumber}
-            side={annotation.side}
-            file={d.file}
-            onSubmit={async (body, tag) => {
-              await onAddComment(
-                d.file,
-                annotation.lineNumber,
-                annotation.side,
-                body,
-                tag
-              );
-              setCommentTarget(null);
-            }}
-            onCancel={() => setCommentTarget(null)}
-          />
-        );
-      }
-
-      if (d.type === "comment") {
-        return (
-          <CommentDisplay
-            comment={d.comment}
-            onDelete={() => onDeleteComment(d.comment.id)}
-          />
-        );
-      }
-
-      return null;
-    },
-    [onAddComment, onDeleteComment]
-  );
-
-  const renderGutterUtility = useCallback(
-    (getHoveredLine: () => { lineNumber: number; side: AnnotationSide } | undefined) => (
-      <button
-        className="cmux-gutter-btn"
-        title="Add comment for AI"
-        onClick={() => {
-          const line = getHoveredLine();
-          if (line && gutterFile) {
-            setCommentTarget({
-              lineNumber: line.lineNumber,
-              side: line.side,
-              file: gutterFile,
-            });
-          }
-        }}
-      >
-        +
-      </button>
-    ),
-    [gutterFile]
-  );
-
-  if (!patch) {
+  if (!patch || filePatches.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-[#8b949e] text-sm">
         No changes relative to main branch
@@ -280,18 +309,17 @@ export function DiffViewer({
         }
       `}</style>
 
-      <PatchDiff
-        patch={patch}
-        options={{
-          diffStyle: layout === "split" ? "split" : "unified",
-          disableLineNumbers: false,
-          theme: "github-dark",
-          lineDiffType: "word",
-        }}
-        lineAnnotations={lineAnnotations}
-        renderAnnotation={renderAnnotation}
-        renderGutterUtility={renderGutterUtility}
-      />
+      {filePatches.map(({ file, patch: filePatch }) => (
+        <SingleFileDiff
+          key={file}
+          file={file}
+          filePatch={filePatch}
+          layout={layout}
+          comments={comments}
+          onAddComment={onAddComment}
+          onDeleteComment={onDeleteComment}
+        />
+      ))}
     </div>
   );
 }
