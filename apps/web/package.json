@@ -6,7 +6,7 @@
     "cmux-diff": "./bin/cmux-diff.mjs"
   },
   "scripts": {
-    "dev": "portless run next dev",
+    "dev": "portless run --force next dev",
     "build": "next build",
     "start": "next start",
     "lint": "oxlint .",
